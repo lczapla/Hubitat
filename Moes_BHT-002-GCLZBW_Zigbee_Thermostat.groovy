@@ -1,7 +1,7 @@
 import hubitat.helper.HexUtils
 
 metadata {
-	definition (name: "Zigbee - Moes BHT-002-GCLZBW Termostat", namespace: "LHeron", author: "LHeron") {
+    definition (name: "Zigbee - Moes BHT-002-GCLZBW Thermostat", namespace: "LCzapla", author: "LCzapla") {
         capability "Configuration"
         capability "TemperatureMeasurement"
         capability "Thermostat"
@@ -17,7 +17,7 @@ metadata {
 }
     
     preferences {
-        //input("lock", "enum", title: "Do you want to lock your thermostat's physical keypad?", options: ["No", "Yes"], defaultValue: "No", required: false, displayDuringSetup: false)
+        input("lock", "enum", title: "Do you want to lock your thermostat's physical keypad?", options: ["No", "Yes"], defaultValue: "No", required: false, displayDuringSetup: false)
         input name: "infoLogging", type: "bool", title: "Enable info logging", defaultValue: true
     }
 }
@@ -363,8 +363,8 @@ def refresh() {
 
 ///////////// commands ///////////////
 private sendTuyaCommand(dp, fn, data) { // everything goes through here
-	log.info "sending ${zigbee.convertToHexString(rand(256), 2)}=${dp},${fn},${data}"
-	zigbee.command(CLUSTER_TUYA, SETDATA, "00" + zigbee.convertToHexString(rand(256), 2) + dp + fn + data)
+    log.info "sending ${zigbee.convertToHexString(rand(256), 2)}=${dp},${fn},${data}"
+    zigbee.command(CLUSTER_TUYA, SETDATA, "00" + zigbee.convertToHexString(rand(256), 2) + dp + fn + data)
 }
 
 private getCLUSTER_TUYA() { 0xEF00 }
@@ -376,7 +376,7 @@ def on() { // this is away setting heat point
     def fn = "0001"
     def data = "01" // on
     
-	log.info "On command"
+    log.info "On command"
     sendTuyaCommand(dp,fn,data)
 }
 
@@ -385,7 +385,7 @@ def off() { // this is away setting heat point
     def fn = "0001"
     def data = "00" // off
     
-	log.info "Off command"
+    log.info "Off command"
     sendTuyaCommand(dp,fn,data)
 }
 
@@ -427,7 +427,7 @@ def setAuto(boolean on) {
 
 def setHeatingSetpoint(preciseDegrees) {
     on()
-	if (preciseDegrees != null) {
+    if (preciseDegrees != null) {
         def dp = "1002"
         def fn = "00"
         def SP = preciseDegrees
@@ -437,9 +437,9 @@ def setHeatingSetpoint(preciseDegrees) {
         log.info "Moes Model"
 
         def data = "040000" + zigbee.convertToHexString(X.intValue(), 2) + zigbee.convertToHexString(Y.intValue(), 2)
-	    log.info "heating setpoint to ${preciseDegrees}"
-	    sendTuyaCommand(dp,fn,data)
-	}
+        log.info "heating setpoint to ${preciseDegrees}"
+        sendTuyaCommand(dp,fn,data)
+    }
 }
 
 def setThermostatMode(String value) {
@@ -475,7 +475,7 @@ def installed() {
 def configure(){    
     log.warn "configure..."
     runIn(1800,logsOff)    
-	//binding to Thermostat cluster"
+    //binding to Thermostat cluster"
     // Set unused default values (for Google Home Integration)
     sendEvent(name: "coolingSetpoint", value: "30")
     sendEvent(name: "thermostatFanMode", value:"auto")
@@ -511,7 +511,7 @@ def cool() {
 
 def emergencyHeat() {
     log.info "emergencyHeat mode is not available for this device. => Defaulting to heat mode instead."
-	heat()
+    heat()
 }
 
 def setCoolingSetpoint(degrees) {
