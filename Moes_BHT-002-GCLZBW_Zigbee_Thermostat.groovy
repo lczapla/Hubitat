@@ -1,101 +1,95 @@
 import hubitat.helper.HexUtils
 
 metadata {
-    definition (name: "Zigbee - Moes BHT-002-GCLZBW Thermostat", namespace: "LCzapla", author: "LCzapla") {
+    definition (name: "Moes BHT-002-GCLZBW Thermostat", namespace: "Moes", author: "LCzapla") {
         capability "Configuration"
         capability "TemperatureMeasurement"
         capability "Thermostat"
-        capability "ThermostatHeatingSetpoint"
         capability "ThermostatSetpoint"
+        capability "ThermostatHeatingSetpoint"
+        //capability "ThermostatCoolingSetpoint"
+        capability "Switch"
         capability "Refresh"
         
-        attribute "WindowOpenDetection","String"
+        command "setThermostatSetpoint", ["number"]
+        command "childLockOn"
+        command "childLockOff"
+
+        attribute "windowOpenDetected","String"
         attribute "childLock","String"
-        attribute "lastOperatingMode", "enum", ["Heat", "Auto"]
+        attribute "lastRunningMode", "string"
         
-    fingerprint endpointId: "01", profileId: "0104", inClusters: "0000,0004,0005,EF00", outClusters: "0019,000A", manufacturer: "_TZE200_aoclfnxz", model: "TS0601", deviceJoinName: "Zigbee - Tuya TRV"
-}
+        fingerprint endpointId: "01", profileId: "0104", inClusters: "0000,0004,0005,EF00", outClusters: "0019,000A", manufacturer: "_TZE200_aoclfnxz", model: "TS0601", deviceJoinName: "Moes BHT-002-GCLZBW Thermostat"
+    }
     
     preferences {
-        input("lock", "enum", title: "Do you want to lock your thermostat's physical keypad?", options: ["No", "Yes"], defaultValue: "No", required: false, displayDuringSetup: false)
-        input name: "infoLogging", type: "bool", title: "Enable info logging", defaultValue: true
+        input(name: "debugLogging", type: "bool", title: "Enable debug logging", description: "", defaultValue: false, submitOnChange: true, displayDuringSetup: true)
+        input(name: "infoLogging", type: "bool", title: "Enable info logging", description: "", defaultValue: true, submitOnChange: true, displayDuringSetup: true)
     }
+}   
+
+def logsOff(){
+    logging("Debug logging disabled...","warn")
+    device.updateSetting("debugLogging",[value:"false",type:"bool"])
 }
-    
+
+def updated() {
+    sendEvent(name: "supportedThermostatFanModes", value: [""])
+    sendEvent(name: "supportedThermostatModes", value: ["off", "heat", "auto"] )
+    sendEvent(name: "thermostatFanMode", value: "off")
+    logging("${device.displayName} updated")
+}
+
+def installed() {
+    sendEvent(name: "supportedThermostatFanModes", value: [""])
+    sendEvent(name: "supportedThermostatModes", value: ["off", "heat", "auto"] )
+    sendEvent(name: "thermostatFanMode", value: "off")
+    logging("${device.displayName} installed")
+}
+
+def configure(){    
+    logging("${device.displayName} configure")
+    runIn(1800,logsOff) //turn off logging in 30mins
+    //binding to Thermostat cluster"
+    // Set unused default values (for Google Home Integration)
+    //sendEvent(name: "coolingSetpoint", value: "30")
+    sendEvent(name: "thermostatFanMode", value:"off")
+    sendEvent(name: "lastRunningMode", value: "heat")
+    updated()
+
+}
+
+def refresh() {
+    zigbee.readAttribute(0,0)
+    zigbee.readAttribute(CLUSTER_TUYA, 0x0000)
+    zigbee.readAttribute(CLUSTER_TUYA, 0x0302)
+    zigbee.readAttribute(CLUSTER_TUYA, 0x0402)
+}
 
 ArrayList<String> parse(String description) {
-    //log.debug "parse $description"
     ArrayList<String> cmd = []
-    Map msgMap = null
-
-    if(description.indexOf('encoding: 42') >= 0) {
-        List values = description.split("value: ")[1].split("(?<=\\G..)")
-        String fullValue = values.join()
-        Integer zeroIndex = values.indexOf("01")
-            if(zeroIndex > -1) {
-                msgMap = zigbee.parseDescriptionAsMap(description.replace(fullValue, values.take(zeroIndex).join()))
-                values = values.drop(zeroIndex + 3)
-                msgMap["additionalAttrs"] = [
-                    ["encoding": "41",
-                    "value": parseXiaomiStruct(values.join(), isFCC0=false, hasLength=true)]
-                    ]
-                log.warn "encoding: 42 parse 37 IF true"
-            } 
-            else {
-                msgMap = zigbee.parseDescriptionAsMap(description) //modle name
-                //log.warn "encoding: 42 parse 51 ELSE true"
-            }
-        } 
-        else {
-            msgMap = zigbee.parseDescriptionAsMap(description)
-        }
-    
-        if(msgMap.containsKey("encoding") && msgMap.containsKey("value") && msgMap["encoding"] != "41" && msgMap["encoding"] != "42") {
-            //log.warn "pase lin 59 used - ${description}"
-            msgMap["valueParsed"] = zigbee_generic_decodeZigbeeData(msgMap["value"], msgMap["encoding"])
-        }
-        
-        
-    
-        if(msgMap == [:] && description.indexOf("zone") == 0) {
-            msgMap["type"] = "zone"
-            java.util.regex.Matcher zoneMatcher = description =~ /.*zone.*status.*0x(?<status>([0-9a-fA-F][0-9a-fA-F])+).*extended.*status.*0x(?<statusExtended>([0-9a-fA-F][0-9a-fA-F])+).*/
-            if(zoneMatcher.matches()) {
-                  msgMap["parsed"] = true
-                  msgMap["status"] = zoneMatcher.group("status")
-                  msgMap["statusInt"] = Integer.parseInt(msgMap["status"], 16)
-                  msgMap["statusExtended"] = zoneMatcher.group("statusExtended")
-                  msgMap["statusExtendedInt"] = Integer.parseInt(msgMap["statusExtended"], 16)
-            } 
-            else {
-               msgMap["parsed"] = false
-            }
-            //log.warn "line 64 section used"
-        }
-    
-    //log.debug " ${msgMap}"
+    Map msgMap = parseMessage(description)
 
     switch(msgMap["cluster"] + '_' + msgMap["attrId"]) {
         case "0000_0001":
-            log.trace("Application ID Received")
+            logging("Application ID Received","trace")
             if(msgMap['value']) {
                 updateDataValue("application", msgMap['value'])
             }
             break
         case "0000_0004":
-            log.trace("Manufacturer Name Received ${msgMap['value']}")
+            logging("Manufacturer Name Received ${msgMap['value']}","trace")
             if(msgMap['value']) {
                 updateDataValue("manufacturer", msgMap['value'])
             }
             break
         case "0000_0005":
-            log.trace("Model Name Received")
+            logging("Model Name Received","trace")
             if(msgMap['value']) {
                 updateDataValue('model', msgMap['value'])
             }    
             break
         default:
-            //log.debug " ${msgMap["cluster"]}  ${msgMap["attrId"]} $msgMap"
             switch(msgMap["clusterId"]) {
                 case "0013":
                     logging("MULTISTATE CLUSTER EVENT")
@@ -107,12 +101,11 @@ ArrayList<String> parse(String description) {
                     logging("GENERAL CLUSTER EVENT")
                     break
                 case "8004":
-                    log.trace("Simple Descriptor Information Received - description:${description} | parseMap:${msgMap}")
+                    logging("Simple Descriptor Information Received - description:${description} | parseMap:${msgMap}","trace")
                     updateDataFromSimpleDescriptorData(msgMap["data"])
                     break
                 case "8031":
                     logging("Link Quality Cluster Event - description:${description} | parseMap:${msgMap}")
-
                     break
                 case "8032":
                     logging("Routing Table Cluster Event - description:${description} | parseMap:${msgMap}")
@@ -123,143 +116,135 @@ ArrayList<String> parse(String description) {
                     break
 ///////////TUYA TRV messages////////////
                 case "EF00":  
-                    //log.debug "clutsInt= ${msgMap[clusterInt]} ,att ID ${msgMap["attrId"]}, cluster ${msgMap["clusterId"]} -- ${msgMap}"
                     List data = msgMap['data']
                     String values = data.collect{c -> HexUtils.hexStringToInt(c)}
+
                     if (data[2] && data[3]){
                         String commandType = data[2] + data[3]
+                        Integer commandCode = HexUtils.hexStringToInt("${data[3]}${data[2]}")
+
+                        //logging("Type: ${commandType} Code: ${commandCode} Values: ${values}","debug")
                         switch(commandType){
-//Set point temp
-                            case "1002": 
-                                String SetPoint = HexUtils.hexStringToInt("${data[-1]}")
-                                //logging("${device.displayName} Temp Set Point ${SetPoint}, values ${values}")
-                                sendEvent(name: "heatingSetpoint", value: SetPoint.toFloat(), unit: "C")
-                                sendEvent(name: "thermostatSetpoint", value: SetPoint.toFloat(), unit: "C")
+                            case COMMAND_TYPE_HEATPOINT: 
+                                String setPoint = HexUtils.hexStringToInt("${data[-1]}")
+                                sendEvent(name: "heatingSetpoint", value: setPoint.toFloat(), unit: "C")
+                                sendEvent(name: "thermostatSetpoint", value: setPoint.toFloat(), unit: "C")
+                                logging("${device.displayName} thermostat set to ${setPoint.toFloat()} C", "debug")
                             break
-//Temperature
-                            case '1802': 
+                            case COMMAND_TYPE_TEMP: 
                                 String temperature = HexUtils.hexStringToInt("${data[-2]}${data[-1]}") / 10
-                                //logging("${device.displayName} Temp ${temperature}, data ${msgMap["data"]}")
                                 sendEvent(name: "temperature", value: temperature, unit: "C" )
-                            break
-// On/Off                            
-                            case "0101": 
+                                logging("${device.displayName} temperature ${temperature} C")
+                            break                          
+                            case COMMAND_TYPE_ONOFF_STATE: 
                                 String mode = HexUtils.hexStringToInt(data[6])
-                                //logging("${device.displayName} on/off , data ${data} , values ${values}")
                                 switch (mode){
                                     case '1':
+                                        def lastRunningMode = device.currentValue("lastRunningMode") ?: "heat"
+                                        sendEvent(name: "thermostatMode", value: lastRunningMode , descriptionText:"On")
+                                        sendEvent(name: "switch", value: true, descriptionText:"On")
                                         logging("${device.displayName} is on")
-                                        //sendEvent(name: "thermostatMode", value: "auto" , descriptionText:"Using internally programmed schedule")
                                     break
                                     case '0':
                                         logging("${device.displayName} is off")
                                         sendEvent(name: "thermostatMode", value: "off" , descriptionText:"Off")
+                                        sendEvent(name: "switch", value: false, descriptionText:"Off")
                                     break
                                 }
-                            break
-// Mode                            
-                            case "0204":
+                            break                           
+                            case COMMAND_TYPE_MANUALMODE:
                                 String mode = HexUtils.hexStringToInt(data[6])
-                                //logging("${device.displayName} mode Code=${mode}")
                                 switch (mode){
                                     case '1':
                                         logging("${device.displayName} mode set to auto")
                                         sendEvent(name: "thermostatMode", value: "auto" , descriptionText:"Using internally programmed schedule")
+                                        sendEvent(name: "lastRunningMode", value: "auto")
+                                        updateDataValue("lastRunningMode", "auto")
                                     break
                                     case '0':
                                         logging("${device.displayName} mode set to manual")
                                         sendEvent(name: "thermostatMode", value: "heat" , descriptionText:"Manual Mode")
+                                        sendEvent(name: "lastRunningMode", value: "heat")
+                                        updateDataValue("lastRunningMode", "heat")
                                     break
                                 }
                             break
-                            
-                            case "0304":
+                            /*case COMMAND_TYPE_AUTOMODE:
                                 String mode = HexUtils.hexStringToInt(data[6])
-                                //logging("${device.displayName} mode Code=${mode}")
                                 switch (mode){
                                     case '0':
                                         logging("${device.displayName} mode set to auto")
                                         sendEvent(name: "thermostatMode", value: "auto" , descriptionText:"Using internally programmed schedule")
+                                        sendEvent(name: "lastRunningMode", value: "auto")
+                                        updateDataValue("lastRunningMode", "auto")
                                     break
                                     case '1':
                                         logging("${device.displayName} mode set to manual")
                                         sendEvent(name: "thermostatMode", value: "heat" , descriptionText:"Manual Mode")
+                                        sendEvent(name: "lastRunningMode", value: "heat")
+                                        updateDataValue("lastRunningMode", "heat")
                                     break
                                 }
-                            break
-// Child lock                   
-                            case '2801': // Child lock
+                            break*/                 
+                            case COMMAND_TYPE_CHILDLOCK:
                                 String locked = HexUtils.hexStringToInt(data[6])
-                                //logging("${device.displayName} child lock ${commandType}, ${locked} 1 - is locked 0 is unlocked")
                                 switch (locked){
                                     case '0':
                                         sendEvent(name: "childLock", value: "off" )
                                     break
                                     case '1':
-                                    sendEvent(name: "childLock", value: "on")
+                                        sendEvent(name: "childLock", value: "on")
                                     break
                                 }
                             break
-                            case "1060":
-                                log.debug "${device.displayName} Command type: ${commandType} - Values: ${values}; Data: ${data}"
+//Untested,
+                            case "6010":
+                                logging("${device.displayName} Command : ${commandType} - Values: ${values}","debug")
                             break
-                            
-// Untested        
-//7202 away preset temperature
                             case "0702": //0x7202 away/off preset temperature
                                 String SetPoint = HexUtils.hexStringToInt(data[9]) / 10
-                                logging("${device.displayName} AWAY Temp Set Point ${commandType}, data9 ${SetPoint}")
-                            break
-// Temperature correction reporting ---DEV   
+                                logging("${device.displayName} AWAY Temp Set Point ${commandType}, data9 ${SetPoint}","debug")
+                            break  
                             case '2C02': //Temperature correction reporting
                                 String temperatureCorr = HexUtils.hexStringToInt(data[9])/ 10
-                                logging("${device.displayName} Temp correction reporting DEV STILL, ${temperatureCorr}, data ${msgMap["data"]}")
+                                logging("${device.displayName} Temp correction reporting DEV STILL, ${temperatureCorr}, data ${msgMap["data"]}","debug")
                             break
-                            
-                            
                             case '6800': //window open detection
-                                String WinTemp = HexUtils.hexStringToInt(data[7])
-                                String WinMink = HexUtils.hexStringToInt(data[8])
-                                logging("${device.displayName} window open detection ${WinTemp}deg in ${WinMin}min will trigger shutdown")
-                                sendEvent(name: "WindowOpenDetection", value: "${WinTemp}deg in ${WinMin}min")
+                                String winTemp = HexUtils.hexStringToInt(data[7])
+                                String winMin = HexUtils.hexStringToInt(data[8])
+                                logging("${device.displayName} window open detection ${winTemp}deg in ${winMin}min will trigger shutdown","debug")
+                                sendEvent(name: "windowOpenDetected", value: "${winTemp}deg in ${winMin}min")
                             break
-                            
-                           case '6902': //boost -- Dev
-                                logging("${device.displayName} boost ${values}")
+                            case '6902': //boost -- Dev
+                                logging("${device.displayName} boost ${values}","debug")
                             break
-                            
                             case '7000': // schedule setting aka Auto mode -- Dev
-                                logging("${device.displayName} schedual P1 ${data[6]}:${data[7]} = ${data[8]}deg , ${data[9]}:${data[10]} = ${data[11]}deg ,more ${data} ")
+                                logging("${device.displayName} schedual P1 ${data[6]}:${data[7]} = ${data[8]}deg , ${data[9]}:${data[10]} = ${data[11]}deg ,more ${data}","debug")
                                 state.SchduleP1 = "${values[6]}:${values[7]} = ${values[8]}deg , ${values[9]}:${values[10]} = ${values[11]}deg ,more ${values}"
                             break
                             case '7001': // schedule setting aka Auto mode -- Dev
-                                logging("${device.displayName} schedual P2 ${data[6]}:${data[7]} = ${data[8]}deg , ${data[9]}:${data[10]} = ${data[11]}deg ,more ${data} ")
+                                logging("${device.displayName} schedual P2 ${data[6]}:${data[7]} = ${data[8]}deg , ${data[9]}:${data[10]} = ${data[11]}deg ,more ${data} ","debug")
                                 state.SchduleP2 = "${values[6]}:${values[7]} = ${values[8]}deg , ${values[9]}:${values[10]} = ${values[11]}deg ,more ${values}"
                             break
                             case '7100': // schedule setting aka Auto mode -- Dev
-                                logging("${device.displayName} schedual P3? ${data[6]}:${data[7]} = ${data[8]}deg , ${data[9]}:${data[10]} = ${data[11]}deg ,more ${data} ")
+                                logging("${device.displayName} schedual P3? ${data[6]}:${data[7]} = ${data[8]}deg , ${data[9]}:${data[10]} = ${data[11]}deg ,more ${data} ","debug")
                                 state.SchduleP3 = "${values[6]}:${values[7]} = ${values[8]}deg , ${values[9]}:${values[10]} = ${values[11]}deg ,more ${values}"
-                            break
-                            
-// 0x7502 away preset number of days                            
-                            case '7502':
-                            logging("${device.displayName} away preset number of days ${HexUtils.hexStringToInt(data[-1])} ")
-                            break
-                            
+                            break                           
+                            case '7502': // 0x7502 away preset number of days 
+                                logging("${device.displayName} away preset number of days ${HexUtils.hexStringToInt(data[-1])} ","debug")
+                                break
                             default:
-                                //log.debug "${device.displayName} other EF00 cluster - ${commandType} - ${values} ${data}"
+                                logging("${device.displayName} other EF00 cluster - ${commandCode} - ${values}","debug")
                                 break
                         }
                     }
                     else { 
                         // found data in map of, data:[02, 19]], data:[00, 00]]
-                        //logging("other cluster EF00 but map null- ${data}")
+                        logging("other cluster EF00 but map null- ${data}","debug")
                     }
                     break
-                
-                /////////////////////////////////////////////////////////////////////////////////////////mc
                 default:
-                    //log.debug "Unhandled Event IGNORE THIS - description:${description} | msgMap:${msgMap}"
+                    logging("Unhandled Event IGNORE THIS - description:${description} | msgMap:${msgMap}","debug")
                     break
             }
             break
@@ -268,221 +253,49 @@ ArrayList<String> parse(String description) {
     return cmd
 }
 
-
-
-def logsOff(){
-    log.warn "debug logging disabled..."
-    device.updateSetting("logEnable",[value:"false",type:"bool"])
-}
-// from markus toolbox driver
-Map unpackStructInMap(Map msgMap, String originalEncoding="4C") {
-     
-    msgMap['encoding'] = originalEncoding
-    List<String> values = msgMap['value'].split("(?<=\\G..)")
-    logging("unpackStructInMap() values=$values", 1)
-    Integer numElements = Integer.parseInt(values.take(2).reverse().join(), 16)
-    values = values.drop(2)
-    List r = []
-    Integer cType = null
-    List ret = null
-    while(values != []) {
-        cType = Integer.parseInt(values.take(1)[0], 16)
-        values = values.drop(1)
-        ret = zigbee_generic_convertStructValueToList(values, cType)
-        r += ret[0]
-        values = ret[1]
+////////////////////// helpers ///////////////////////////////
+Map parseMessage(String description) {
+    Map msgMap = null
+    if(description.indexOf('encoding: 42') >= 0) {
+        List values = description.split("value: ")[1].split("(?<=\\G..)")
+        String fullValue = values.join()
+        Integer zeroIndex = values.indexOf("01")
+            if(zeroIndex > -1) {
+                msgMap = zigbee.parseDescriptionAsMap(description.replace(fullValue, values.take(zeroIndex).join()))
+                values = values.drop(zeroIndex + 3)
+                msgMap["additionalAttrs"] = [
+                    ["encoding": "41",
+                    "value": parseXiaomiStruct(values.join(), isFCC0=false, hasLength=true)]
+                    ]
+            } 
+            else {
+                msgMap = zigbee.parseDescriptionAsMap(description) //modle name
+            }
+    } else {
+        msgMap = zigbee.parseDescriptionAsMap(description)
     }
-    if(r.size() != numElements) throw new Exception("The STRUCT specifies $numElements elements, found ${r.size()}!")
-     
-    msgMap['value'] = r
+    
+    if(msgMap.containsKey("encoding") && msgMap.containsKey("value") && msgMap["encoding"] != "41" && msgMap["encoding"] != "42") {
+        msgMap["valueParsed"] = zigbee_generic_decodeZigbeeData(msgMap["value"], msgMap["encoding"])
+    }   
+    
+    if(msgMap == [:] && description.indexOf("zone") == 0) {
+        msgMap["type"] = "zone"
+        java.util.regex.Matcher zoneMatcher = description =~ /.*zone.*status.*0x(?<status>([0-9a-fA-F][0-9a-fA-F])+).*extended.*status.*0x(?<statusExtended>([0-9a-fA-F][0-9a-fA-F])+).*/
+        if(zoneMatcher.matches()) {
+            msgMap["parsed"] = true
+            msgMap["status"] = zoneMatcher.group("status")
+            msgMap["statusInt"] = Integer.parseInt(msgMap["status"], 16)
+            msgMap["statusExtended"] = zoneMatcher.group("statusExtended")
+            msgMap["statusExtendedInt"] = Integer.parseInt(msgMap["statusExtended"], 16)
+        } 
+        else {
+            msgMap["parsed"] = false
+        }
+    }
     return msgMap
 }
-def zigbee_generic_decodeZigbeeData(String value, String cTypeStr, boolean reverseBytes=true) {
-    List values = value.split("(?<=\\G..)")
-    values = reverseBytes == true ? values.reverse() : values
-    Integer cType = Integer.parseInt(cTypeStr, 16)
-    Map rMap = [:]
-    rMap['raw'] = [:]
-    List ret = zigbee_generic_convertStructValue(rMap, values, cType, "NA", "NA")
-    return ret[0]["NA"]
-}
 
-// BEGIN:getLoggingFunction()
-private boolean logging(message) {
-    boolean didLogging = false
-     
-    Integer logLevelLocal = 0
-    if (infoLogging == null || infoLogging == true) {
-        log.info "$message"
-        didLogging = true
-    }
-    return didLogging
-}
-// END:  getLoggingFunction()
-
-//end markus toobox ////////////////////
-
-
-////////////////////////////////////////////////////////////////////////////
-
-def refresh() {
-    def dp = "0302"
-    def fn = "0"
-    def data = "00" // ??
-    
-    log.debug "refresh"
-    zigbee.readAttribute(0 , 0 )
-    //zigbee.readAttribute(0, 0, 770 )
-    zigbee.readAttribute(0x0000, CLUSTER_TUYA) //get setting but not temparture
-    zigbee.readAttribute(0x0302, CLUSTER_TUYA) 
-    //zigbee.configureReporting(0x0000, CLUSTER_TUYA)
-    zigbee.readAttribute(CLUSTER_TUYA, 0x0402) 
-    
-    //configureReporting(java.lang.Integer, java.lang.Integer, java.lang.Integer, java.lang.Integer, java.lang.Integer), 
-    zigbee.readAttribute(0x0000, 0x0402)
-    
-    
-    zigbee.readAttribute(0x0000, 0x0005) //encoding: 42 parse 51 ELSE true Model Name Received 0000_0005
-    zigbee.readAttribute(0x0000, 0x0004)
-    zigbee.readAttribute(0x0000, 0x0000) // 0000 0000
-    
-    // nothing zigbee.readAttribute(0x0000, CLUSTER_TUYA, [:] ) 
-    // nothing zigbee.readAttribute(0x0402,0x0000) 
-    // error   zigbee.readAttribute(0x0000)
-    // nothing zigbee.readAttribute(0x0000, 0x0021)
-    
-    sendTuyaCommand(dp,fn,data)
-    // ????????private getPOWER_ATTR_BATTERY_PERCENTAGE_REMAINING() { 0x0021 }
-//    return  [
-//            "he rattr 0x${device.deviceNetworkId} 0x${device.endpointId} 0x0000  0x0005 {}","delay 600", 
-//            "he rattr 0x${device.deviceNetworkId} 0x${device.endpointId} 0x0000, 0x0004 {}"
-//    ]
-}    
-
-
-
-///////////// commands ///////////////
-private sendTuyaCommand(dp, fn, data) { // everything goes through here
-    log.info "sending ${zigbee.convertToHexString(rand(256), 2)}=${dp},${fn},${data}"
-    zigbee.command(CLUSTER_TUYA, SETDATA, "00" + zigbee.convertToHexString(rand(256), 2) + dp + fn + data)
-}
-
-private getCLUSTER_TUYA() { 0xEF00 }
-private getSETDATA() { 0x00 }
-private rand(n) { return (new Random().nextInt(n))} 
-
-def on() { // this is away setting heat point
-    def dp = "0101"
-    def fn = "0001"
-    def data = "01" // on
-    
-    log.info "On command"
-    sendTuyaCommand(dp,fn,data)
-}
-
-def off() { // this is away setting heat point
-    def dp = "0101"
-    def fn = "0001"
-    def data = "00" // off
-    
-    log.info "Off command"
-    sendTuyaCommand(dp,fn,data)
-}
-
-def heat(){
-    on();
-    setAuto(false);
-    setHeat(true);
-}
-
-def setHeat(boolean on) { //manual and hubitat control
-    def dp = "0204"
-    def fn = "0001"
-    if(on==false){
-        log.info "Turn Heat/Manual Off"
-        sendTuyaCommand(dp,fn,"01") 
-    } else {
-        log.info "Turn Heat/Manual On"
-        sendTuyaCommand(dp,fn,"00") 
-    }
-}
-
-def auto(){
-    on();
-    setAuto(true)
-    setHeat(false);
-}
-
-def setAuto(boolean on) {
-    def dp = "0304"
-    def fn = "0001"
-    if(on==false){
-        log.info "Turn Auto On"
-        sendTuyaCommand(dp,fn,"01")  
-    } else {
-        log.info "Turn Auto Off"
-        sendTuyaCommand(dp,fn,"00") 
-    }
-}
-
-def setHeatingSetpoint(preciseDegrees) {
-    on()
-    if (preciseDegrees != null) {
-        def dp = "1002"
-        def fn = "00"
-        def SP = preciseDegrees
-        def X = (SP / 256).intValue()
-        def Y = SP.intValue() % 256
-
-        log.info "Moes Model"
-
-        def data = "040000" + zigbee.convertToHexString(X.intValue(), 2) + zigbee.convertToHexString(Y.intValue(), 2)
-        log.info "heating setpoint to ${preciseDegrees}"
-        sendTuyaCommand(dp,fn,data)
-    }
-}
-
-def setThermostatMode(String value) {
-    switch (value) {
-        case "heat":
-        case "emergency heat":
-            return heat()
-        
-        case "eco":
-        case "cool":
-            return eco()
-        
-        case "auto":
-            return auto()
-        
-        default:
-            return off()
-    }
-}
-
-def updated() {
-    sendEvent(name: "supportedThermostatFanModes", value: [""])
-    sendEvent(name: "supportedThermostatModes", value: ["off", "heat", "auto"] )
-    sendEvent(name: "thermostatFanMode", value: "off")
-    log.info "${device.displayName} updated..."
-}
-def installed() {
-    sendEvent(name: "supportedThermostatFanModes", value: [""])
-    sendEvent(name: "supportedThermostatModes", value: ["off", "heat", "auto"] )
-    sendEvent(name: "thermostatFanMode", value: "auto")
-    
-}
-def configure(){    
-    log.warn "configure..."
-    runIn(1800,logsOff)    
-    //binding to Thermostat cluster"
-    // Set unused default values (for Google Home Integration)
-    sendEvent(name: "coolingSetpoint", value: "30")
-    sendEvent(name: "thermostatFanMode", value:"auto")
-    updateDataValue("lastRunningMode", "heat") // heat is the only compatible mode for this device
-    updated()
-
-}
 void updateDataFromSimpleDescriptorData(List<String> data) {
     Map<String,String> sdi = parseSimpleDescriptorData(data)
     if(sdi != [:]) {
@@ -492,52 +305,20 @@ void updateDataFromSimpleDescriptorData(List<String> data) {
         updateDataValue("outClusters", sdi['outClusters'])
         getInfo(true, sdi)
     } else {
-        log.warn("No VALID Simple Descriptor Data received!")
+        logging("No VALID Simple Descriptor Data received!","warn")
     }
     sdi = null
 }
 
-
-//unused commands and redirected
-def eco() { //holiday
-    log.info "eco mode is not available for this device. => Defaulting to off mode instead."
-    off()
+def zigbee_generic_decodeZigbeeData(String value, String cTypeStr, boolean reverseBytes=true) {
+    List values = value.split("(?<=\\G..)")
+    values = reverseBytes == true ? values.reverse() : values
+    Integer cType = Integer.parseInt(cTypeStr, 16)
+    Map rMap = [:]
+    rMap['raw'] = [:]
+    List ret = zigbee_generic_convertStructValue(rMap, values, cType, "NA", "NA")
+    return ret[0]["NA"]
 }
-
-def cool() {
-    log.info "cool mode is not available for this device. => Defaulting to eco mode instead."
-    eco()
-}
-
-def emergencyHeat() {
-    log.info "emergencyHeat mode is not available for this device. => Defaulting to heat mode instead."
-    heat()
-}
-
-def setCoolingSetpoint(degrees) {
-    log.info "setCoolingSetpoint is not available for this device"
-}
-
-def fanAuto() {
-    log.info "fanAuto mode is not available for this device"
-}
-
-def fanCirculate(){
-    log.info "fanCirculate mode is not available for this device"
-}
-
-def fanOn(){
-    log.info "fanOn mode is not available for this device"
-}
-
-def setSchedule(JSON_OBJECT){
-    log.info "setSchedule is not available for this device"
-}
-
-def setThermostatFanMode(fanmode){
-    log.info "setThermostatFanMode is not available for this device"
-}
-
 
 List zigbee_generic_convertStructValueToList(List values, Integer cType) {
     Map rMap = [:]
@@ -646,6 +427,7 @@ List zigbee_generic_convertStructValue(Map r, List values, Integer cType, String
     }
     return [r, values]
 }
+
 String integerToHexString(BigDecimal value, Integer minBytes, boolean reverse=false) {
     return integerToHexString(value.intValue(), minBytes, reverse=reverse)
 }
@@ -656,5 +438,183 @@ String integerToHexString(Integer value, Integer minBytes, boolean reverse=false
     } else {
         return HexUtils.integerToHexString(value, minBytes)
     }
-    
+}
+
+private boolean logging(message,level="info") {
+    boolean didLogging = false
+    Integer logLevelLocal = 0
+    //log.debug "Level: ${level}, infoLogging: ${infoLogging}, debugLogging: ${debugLogging}"
+    switch(level){
+        case "info": 
+            if (infoLogging == null || infoLogging == true) {
+                log.info "$message"
+                didLogging = true
+            }
+        break;
+        case "debug": 
+            if (debugLogging == null || debugLogging == true) {
+                log.debug "$message"
+                didLogging = true
+            }
+        break;
+        case "warn": 
+            if (infoLogging == null || infoLogging == true) {
+                log.warn "$message"
+                didLogging = true
+            }
+        break;
+        case "trace": 
+            if (infoLogging == null || infoLogging == true) {
+                log.trace "$message"
+                didLogging = true
+            }
+        break;
+    }
+    return didLogging
+}
+
+private getCLUSTER_TUYA() { 0xEF00 }
+private getSETDATA() { 0x00 }
+
+private sendTuyaCommand(dp, fn, data) {
+    sendTuyaCommand("00" + zigbee.convertToHexString(rand(256), 2) + dp + fn + data)
+}
+
+private sendTuyaCommand(String cmd) { 
+    logging("Sending ${cmd}","debug")
+    zigbee.command(CLUSTER_TUYA, SETDATA, null, 200, cmd)
+}
+
+private rand(n) { return (new Random().nextInt(n))} 
+
+////////////////////////////////////////////////////////////////////////////  
+
+///////////// commands ///////////////
+
+private getCOMMAND_TYPE_HEATPOINT() { return integerToHexString(528,2,true) };
+private getCOMMAND_TYPE_TEMP() { return integerToHexString(536,2,true) };
+private getCOMMAND_TYPE_MANUALMODE() { return integerToHexString(1026,2,true) };
+private getCOMMAND_TYPE_AUTOMODE() { return integerToHexString(1027,2,true) };
+private getCOMMAND_TYPE_ONOFF_STATE() { return integerToHexString(257,2,true) };
+private getCOMMAND_TYPE_CHILDLOCK() { return integerToHexString(296,2,true) };
+
+def on() { 
+    def isRunning = device.currentValue("switch") ?: "false"
+    logging("IsRunning: ${isRunning}","debug")
+    if (isRunning=="false") {
+        def lastRunningMode = device.currentValue("lastRunningMode") ?: "heat"
+        logging("On command, lastRunningMode: ${lastRunningMode}")
+        sendTuyaCommand(COMMAND_TYPE_ONOFF_STATE,"0001","02")
+    } else { null }
+}
+
+def off() {
+    logging("Off command")
+    sendTuyaCommand(COMMAND_TYPE_ONOFF_STATE,"0001","00")
+}
+
+def heat(){
+    def cmd = on()
+    if(cmd!=null){
+        runIn(1,"sendHeat")
+        cmd
+    } else {
+        sendHeat() 
+    }
+}
+
+def sendAuto() {
+    logging("Turn Auto On")
+    sendTuyaCommand(COMMAND_TYPE_MANUALMODE,"0001","01") 
+}
+
+def sendHeat() {
+    logging("Turn Heat/Manual On")
+    sendTuyaCommand(COMMAND_TYPE_MANUALMODE,"0001","00") 
+}
+
+def auto(){
+    def cmd = on()
+    if(cmd!=null){
+        runIn(1,"sendAuto")
+        cmd
+    } else {
+        sendAuto() 
+    }
+}
+
+def setHeatingSetpoint(preciseDegrees) {
+    setThermostatSetpoint(preciseDegrees)
+}
+
+def childLockOn() {
+}
+
+def childLockOff() {
+}
+
+def setThermostatSetpoint(preciseDegrees) {
+    if (preciseDegrees != null) {
+        def SP = preciseDegrees
+        def X = (SP / 256).intValue()
+        def Y = SP.intValue() % 256
+        logging("Thermostat setpoint to ${preciseDegrees}")
+        sendTuyaCommand(COMMAND_TYPE_HEATPOINT,"00","040000" + zigbee.convertToHexString(X.intValue(), 2) + zigbee.convertToHexString(Y.intValue(), 2))
+    }
+}
+
+def setThermostatMode(String value) {
+    switch (value) {
+        case "heat":
+        case "boost":
+        case "emergency heat":
+            return heat()
+        case "eco":
+        case "cool":
+            return eco()
+        case "auto":
+            return auto()
+        default:
+            return off()
+    }
+}
+
+//unused commands and redirected
+def eco() { //holiday
+    logging("Eco mode is not available for this device. => Defaulting to off mode instead.","debug")
+    off()
+}
+
+def cool() {
+    logging("Cool mode is not available for this device. => Defaulting to eco mode instead.","debug")
+    eco()
+}
+
+def emergencyHeat() {
+    logging("EmergencyHeat mode is not available for this device. => Defaulting to heat mode instead.","debug")
+    heat()
+}
+
+def setCoolingSetpoint(degrees) {
+    logging("SetCoolingSetpoint is not available for this device","debug")
+}
+
+def fanAuto() {
+    logging("FanAuto mode is not available for this device","debug")
+}
+
+def fanCirculate(){
+    logging("FanCirculate mode is not available for this device","debug")
+}
+
+def fanOn(){
+    logging("FanOn mode is not available for this device","debug")
+}
+
+def setSchedule(JSON_OBJECT){
+    logging("SetSchedule is not available for this device","debug")
+}
+
+def setThermostatFanMode(fanmode){
+    logging("SetThermostatFanMode is not available for this device","debug")
 }
