@@ -18,6 +18,7 @@ metadata {
         attribute "windowOpenDetected","String"
         attribute "childLock","String"
         attribute "lastRunningMode", "string"
+        attribute "heating","String"
         
         fingerprint endpointId: "01", profileId: "0104", inClusters: "0000,0004,0005,EF00", outClusters: "0019,000A", manufacturer: "_TZE200_aoclfnxz", model: "TS0601", deviceJoinName: "Moes BHT-002-GCLZBW Thermostat"
     }
@@ -55,6 +56,7 @@ def configure(){
     //sendEvent(name: "coolingSetpoint", value: "30")
     sendEvent(name: "thermostatFanMode", value:"off")
     sendEvent(name: "lastRunningMode", value: "heat")
+    sendEvent(name: "heating", value: "off")
     updated()
 
 }
@@ -125,11 +127,35 @@ ArrayList<String> parse(String description) {
 
                         //logging("Type: ${commandType} Code: ${commandCode} Values: ${values}","debug")
                         switch(commandType){
+                            case COMMAND_TYPE_HEATING:
+                                String mode = HexUtils.hexStringToInt(data[6])
+                                def lastHeating = device.currentValue("heating") ?: "off"
+                                switch (mode){
+                                    case '1':
+                                        if(lastHeating!="off"){
+                                            updateDataValue("heating", "off")
+                                            sendEvent(name: "heating", value: "off")
+                                            logging("${device.displayName} heating off")
+                                        }
+                                    break
+                                    case '0':
+                                        if(lastHeating!="on"){
+                                            updateDataValue("heating", "on")
+                                            sendEvent(name: "heating", value: "on")
+                                            logging("${device.displayName} heating on")
+                                        }
+                                    break
+                                }
+                            break
                             case COMMAND_TYPE_HEATPOINT: 
                                 String setPoint = HexUtils.hexStringToInt("${data[-1]}")
-                                sendEvent(name: "heatingSetpoint", value: setPoint.toFloat(), unit: "C")
-                                sendEvent(name: "thermostatSetpoint", value: setPoint.toFloat(), unit: "C")
-                                logging("${device.displayName} thermostat set to ${setPoint.toFloat()} C", "debug")
+                                def lastHeatPoint = device.currentValue("heatingSetpoint") ?: "0"
+                                //logging("${device.displayName} lastHeatPoint  ${lastHeatPoint.toFloat()} C", "debug")
+                                if (setPoint.toFloat()!=lastHeatPoint.toFloat()){
+                                    sendEvent(name: "heatingSetpoint", value: setPoint.toFloat(), unit: "C")
+                                    sendEvent(name: "thermostatSetpoint", value: setPoint.toFloat(), unit: "C")
+                                    logging("${device.displayName} thermostat set to ${setPoint.toFloat()} C", "debug")
+                                }
                             break
                             case COMMAND_TYPE_TEMP: 
                                 String temperature = HexUtils.hexStringToInt("${data[-2]}${data[-1]}") / 10
@@ -497,6 +523,7 @@ private getCOMMAND_TYPE_MANUALMODE() { return integerToHexString(1026,2,true) };
 private getCOMMAND_TYPE_AUTOMODE() { return integerToHexString(1027,2,true) };
 private getCOMMAND_TYPE_ONOFF_STATE() { return integerToHexString(257,2,true) };
 private getCOMMAND_TYPE_CHILDLOCK() { return integerToHexString(296,2,true) };
+private getCOMMAND_TYPE_HEATING() { return integerToHexString(1060,2,true) };
 
 def on() { 
     def isRunning = device.currentValue("switch") ?: "false"
